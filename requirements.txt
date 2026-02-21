@@ -1,0 +1,13 @@
+# Core agent framework
+autogen-agentchat==0.4.*
+autogen-ext[openai,mcp]==0.4.*
+
+# Web server
+flask>=3.0,<4.0
+flask-cors>=4.0,<5.0
+
+# Config
+python-dotenv>=1.0,<2.0
+
+# Ngrok tunnel (optional — only needed for public URLs)
+pyngrok>=7.0,<8.0
