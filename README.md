@@ -13,19 +13,22 @@
 Client (curl / Postman)
     │ POST /run {"task": "..."}
     ▼
-Flask REST API  (app.py)  :7001
-    │ asyncio.run(run_task)
+FastAPI REST API  (app.py)  :7001
+    │ await AgentPool.run_task(task)
+    ▼
+AgentPool singleton  (agent_pool.py)
+    │ MCP tools loaded ONCE at startup · reused across all requests
     ▼
 AutoGen AssistantAgent  (notion_mcp_agent.py)
-    │ OpenAI o4-mini · MCP tools · RoundRobinGroupChat
+    │ OpenAI o4-mini · RoundRobinGroupChat
     ▼
 Notion MCP Server  (npx mcp-remote)
     │ create_page · search · list_databases · update_page …
     ▼
-Notion Cloud  (workspace)
+Notion Cloud  (your workspace)
 ```
 
-Config flow: `.env` → `config.py` → `app.py` + `notion_mcp_agent.py`
+Config flow: `.env` → `config.py` → `app.py` + `agent_pool.py`
 
 ---
 
@@ -70,6 +73,7 @@ cp .env.example .env             # then open .env and fill in your keys
 ```bash
 python app.py
 # Server starts at http://localhost:7001
+# Interactive API docs at http://localhost:7001/docs
 ```
 
 ---
@@ -107,11 +111,12 @@ curl -X POST http://localhost:7001/run \
 
 ```
 notion-mcp-agent/
-├── app.py                  # Flask REST API
-├── notion_mcp_agent.py     # AutoGen agent & MCP tool loading
+├── app.py                  # FastAPI REST API
+├── agent_pool.py           # Agent singleton — MCP tools loaded once
+├── notion_mcp_agent.py     # Local CLI entry point for dev/testing
 ├── config.py               # Centralised config from .env
 ├── requirements.txt
-├── .env.example            # Copy to .env and fill in
+├── .env.example
 ├── .gitignore
 └── README.md
 ```
@@ -120,8 +125,8 @@ notion-mcp-agent/
 
 ## Roadmap
 
-- [ ] FastAPI + native async
-- [ ] Agent singleton (load MCP tools once)
+- [x] Project scaffold and secure config
+- [x] FastAPI + native async, agent singleton
 - [ ] Structured logging & retry logic
 - [ ] Streaming SSE endpoint (`/run/stream`)
 - [ ] Docker + GitHub Actions CI

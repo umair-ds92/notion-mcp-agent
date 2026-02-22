@@ -1,15 +1,15 @@
 """
-config.py — Centralized configuration loaded from environment variables.
+config.py — Centralised configuration loaded from environment variables.
 All settings live here. No other file should import os.getenv() directly.
 """
 
 import os
 from dotenv import load_dotenv
 
-load_dotenv()  # Loads .env file if present
+load_dotenv()
 
 
-# ── OpenAI ──────────────────────────────────────────────────────────────────
+# ── OpenAI ───────────────────────────────────────────────────────────────────
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "o4-mini")
 
