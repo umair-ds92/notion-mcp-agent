@@ -1,6 +1,6 @@
 """
 config.py — Centralised configuration loaded from environment variables.
-All settings live here. No other file should import os.getenv() directly.
+All settings live here. No other file should call os.getenv() directly.
 """
 
 import os
@@ -26,6 +26,14 @@ AGENT_SYSTEM_MESSAGE: str = (
     "Try to infer the right tool and call it to complete the task. "
     "Say TERMINATE when you are done."
 )
+
+# ── Retry ────────────────────────────────────────────────────────────────────
+RETRY_MAX_ATTEMPTS: int = int(os.getenv("RETRY_MAX_ATTEMPTS", "3"))
+RETRY_BASE_DELAY: float = float(os.getenv("RETRY_BASE_DELAY", "1.0"))
+RETRY_MAX_DELAY: float = float(os.getenv("RETRY_MAX_DELAY", "8.0"))
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")  # DEBUG | INFO | WARNING | ERROR
 
 # ── Server ───────────────────────────────────────────────────────────────────
 PORT: int = int(os.getenv("PORT", "7001"))

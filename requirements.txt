@@ -2,12 +2,20 @@
 autogen-agentchat==0.4.*
 autogen-ext[openai,mcp]==0.4.*
 
-# Web server (FastAPI replaces Flask for native async support)
+# Web server
 fastapi>=0.110,<1.0
 uvicorn[standard]>=0.29,<1.0
 
 # Config
 python-dotenv>=1.0,<2.0
 
+# Logging
+python-json-logger>=2.0,<3.0
+
 # Ngrok tunnel (optional)
 pyngrok>=7.0,<8.0
+
+# Testing
+pytest>=8.0,<9.0
+pytest-asyncio>=0.23,<1.0
+httpx>=0.27,<1.0
