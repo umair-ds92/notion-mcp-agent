@@ -58,12 +58,11 @@ app.add_middleware(
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     req_id = getattr(request.state, "request_id", "unknown")
-    log.error(
-        "unhandled_exception",
-        request_id=req_id,
-        path=request.url.path,
-        error=str(exc),
-    )
+    log.error("unhandled_exception", extra={
+        "request_id": req_id,
+        "path": request.url.path,
+        "error": str(exc),
+    })
     return JSONResponse(
         status_code=500,
         content={
@@ -81,19 +80,17 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 async def attach_request_id(request: Request, call_next):
     request_id = str(uuid.uuid4())
     request.state.request_id = request_id
-    log.info(
-        "request_received",
-        request_id=request_id,
-        method=request.method,
-        path=request.url.path,
-    )
+    log.info("request_received", extra={
+        "request_id": request_id,
+        "method": request.method,
+        "path": request.url.path,
+    })
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
-    log.info(
-        "request_complete",
-        request_id=request_id,
-        status_code=response.status_code,
-    )
+    log.info("request_complete", extra={
+        "request_id": request_id,
+        "status_code": response.status_code,
+    })
     return response
 
 
@@ -131,24 +128,19 @@ async def health():
     return {"status": "ok", "message": "Notion MCP Agent is healthy."}
 
 
-@app.post(
-    "/run",
-    response_model=RunResponse,
-    responses={500: {"model": ErrorResponse}},
-)
+@app.post("/run", response_model=RunResponse, responses={500: {"model": ErrorResponse}})
 async def run(body: RunRequest, request: Request):
-    """Submit a natural language task for the agent to execute in Notion."""
     req_id = request.state.request_id
-    log.info("run_request", request_id=req_id, task_preview=body.task[:80])
+    log.info("run_request", extra={"request_id": req_id, "task_preview": body.task[:80]})
 
     try:
         result = await AgentPool.run_task(body.task)
         return {"status": "success", "result": result, "request_id": req_id}
     except Exception as exc:
-        log.error("run_failed", request_id=req_id, error=str(exc))
-        raise HTTPException(
+        log.error("run_failed", extra={"request_id": req_id, "error": str(exc)})
+        return JSONResponse(
             status_code=500,
-            detail={
+            content={
                 "status": "error",
                 "code": "agent_error",
                 "message": str(exc),

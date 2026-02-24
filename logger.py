@@ -14,25 +14,25 @@ Usage:
 import logging
 import sys
 from pythonjsonlogger.jsonlogger import JsonFormatter
-
 import config
 
+class _ContextFormatter(JsonFormatter):
+    """Includes all extra={} fields in the JSON output."""
+    def add_fields(self, log_record, record, message_dict):
+        super().add_fields(log_record, record, message_dict)
+        log_record["level"] = record.levelname
+        log_record["logger"] = record.name
 
 def get_logger(name: str) -> logging.Logger:
-    """Return a named logger that emits structured JSON to stdout."""
     logger = logging.getLogger(name)
-
     if logger.handlers:
-        return logger  # already configured — avoid duplicate handlers
-
+        return logger
     handler = logging.StreamHandler(sys.stdout)
-    formatter = JsonFormatter(
+    handler.setFormatter(_ContextFormatter(
         fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S",
-    )
-    handler.setFormatter(formatter)
+    ))
     logger.addHandler(handler)
     logger.setLevel(getattr(logging, config.LOG_LEVEL.upper(), logging.INFO))
     logger.propagate = False
-
     return logger

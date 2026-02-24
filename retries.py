@@ -56,26 +56,24 @@ def with_retry(
                     last_exc = exc
 
                     if attempt == max_attempts:
-                        log.error(
-                            "retry_exhausted",
-                            function=fn.__name__,
-                            attempts=attempt,
-                            error=str(exc),
-                        )
+                        log.error("retry_exhausted", extra={
+                            "function": fn.__name__,
+                            "attempts": attempt,
+                            "error": str(exc),
+                        })
                         raise
 
                     # Full jitter: sleep = random(0, min(cap, base * 2^attempt))
                     ceiling = min(max_delay, base_delay * (2 ** attempt))
                     sleep_for = random.uniform(0, ceiling)
 
-                    log.warning(
-                        "retry_attempt",
-                        function=fn.__name__,
-                        attempt=attempt,
-                        max_attempts=max_attempts,
-                        retry_in_seconds=round(sleep_for, 2),
-                        error=str(exc),
-                    )
+                    log.warning("retry_attempt", extra={
+                        "function": fn.__name__,
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                        "retry_in_seconds": round(sleep_for, 2),
+                        "error": str(exc),
+                    })
 
                     await asyncio.sleep(sleep_for)
 
