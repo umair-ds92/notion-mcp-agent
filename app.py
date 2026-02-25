@@ -1,11 +1,10 @@
 """
-app.py — FastAPI REST API with structured logging and consistent error responses.
+app.py — FastAPI REST API with SSE streaming endpoint.
 
 Changes:
-  - Every request logs a unique request_id for traceability.
-  - Consistent error payload: {"status": "error", "code": "...", "message": "..."}.
-  - Startup and shutdown events are logged.
-  - Exception handler added for unhandled 500s — never leaks raw tracebacks.
+  - New POST /run/stream endpoint — streams agent messages in real
+    time using Server-Sent Events (SSE) via StreamingResponse.
+  - POST /run unchanged — still returns the full result at once.
 """
 
 import uuid
@@ -14,7 +13,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 import config
@@ -29,7 +28,7 @@ log = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config.validate()
-    log.info("app_startup", version="0.3.0", port=config.PORT)
+    log.info("app_startup", extra={"version": "0.4.0", "port": config.PORT})
     await AgentPool.initialise()
     yield
     await AgentPool.shutdown()
@@ -41,7 +40,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Notion MCP Agent",
     description="Natural language REST API for your Notion workspace.",
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
 )
 
@@ -53,7 +52,7 @@ app.add_middleware(
 )
 
 
-# ── Global exception handler — no raw tracebacks to clients ──────────────────
+# ── Global exception handler ──────────────────────────────────────────────────
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
@@ -116,6 +115,31 @@ class HealthResponse(BaseModel):
     message: str
 
 
+# ── SSE helper ────────────────────────────────────────────────────────────────
+
+async def _sse_generator(task: str, request_id: str):
+    """
+    Async generator that yields Server-Sent Event formatted strings.
+
+    SSE format:
+        data: <payload>\n\n
+
+    The client receives one event per agent message as it is produced,
+    rather than waiting for the full run to complete.
+    A final `data: [DONE]` event signals the stream is finished.
+    """
+    try:
+        async for message in AgentPool.stream_task(task):
+            # Escape newlines inside the message so SSE framing stays intact
+            safe = message.replace("\n", " ")
+            yield f"data: {safe}\n\n"
+    except Exception as exc:
+        log.error("stream_task_failed", extra={"request_id": request_id, "error": str(exc)})
+        yield f"data: [ERROR] {str(exc)}\n\n"
+    finally:
+        yield "data: [DONE]\n\n"
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/", include_in_schema=False)
@@ -130,6 +154,7 @@ async def health():
 
 @app.post("/run", response_model=RunResponse, responses={500: {"model": ErrorResponse}})
 async def run(body: RunRequest, request: Request):
+    """Submit a task and receive the full result once the agent finishes."""
     req_id = request.state.request_id
     log.info("run_request", extra={"request_id": req_id, "task_preview": body.task[:80]})
 
@@ -138,15 +163,47 @@ async def run(body: RunRequest, request: Request):
         return {"status": "success", "result": result, "request_id": req_id}
     except Exception as exc:
         log.error("run_failed", extra={"request_id": req_id, "error": str(exc)})
-        return JSONResponse(
+        raise HTTPException(
             status_code=500,
-            content={
+            detail={
                 "status": "error",
                 "code": "agent_error",
                 "message": str(exc),
                 "request_id": req_id,
             },
         )
+
+
+@app.post(
+    "/run/stream",
+    summary="Stream agent messages via SSE",
+    response_description="Server-Sent Events stream of agent messages",
+)
+async def run_stream(body: RunRequest, request: Request):
+    """
+    Submit a task and receive agent messages streamed in real time.
+
+    Returns a text/event-stream response. Each SSE event contains one
+    agent message. The stream ends with a `data: [DONE]` event.
+
+    Example with curl:
+        curl -X POST http://localhost:7001/run/stream \\
+          -H "Content-Type: application/json" \\
+          -d '{"task": "List all pages"}' \\
+          --no-buffer
+    """
+    req_id = request.state.request_id
+    log.info("stream_request", extra={"request_id": req_id, "task_preview": body.task[:80]})
+
+    return StreamingResponse(
+        _sse_generator(body.task, req_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",       # disables nginx buffering
+            "X-Request-ID": req_id,
+        },
+    )
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -156,6 +213,6 @@ if __name__ == "__main__":
         from pyngrok import ngrok
         ngrok.set_auth_token(config.NGROK_AUTH_TOKEN)
         public_url = ngrok.connect(config.PORT)
-        log.info("ngrok_tunnel", url=str(public_url))
+        log.info("ngrok_tunnel", extra={"url": str(public_url)})
 
     uvicorn.run("app:app", host="0.0.0.0", port=config.PORT, reload=False)

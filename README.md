@@ -3,6 +3,7 @@
 > Autonomous Notion workspace agent built with **Microsoft AutoGen** and **MCP (Model Context Protocol)** — interact with your Notion pages via a natural language REST API.
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
+[![CI](https://github.com/umair-ds92/notion-mcp-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/umair-ds92/notion-mcp-agent/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
@@ -11,18 +12,19 @@
 
 ```
 Client (curl / Postman)
-    │ POST /run {"task": "..."}
+    │
+    ├── POST /run         → full result returned at once
+    └── POST /run/stream  → messages streamed via SSE in real time
     ▼
 FastAPI REST API  (app.py)  :7001
-    │ request_id attached · structured logs emitted
+    │ request_id · structured logs · retries
     ▼
 AgentPool singleton  (agent_pool.py)
-    │ MCP tools loaded once · retried on failure · duration logged
+    │ MCP tools loaded once at startup
     ▼
-AutoGen AssistantAgent
-    │ OpenAI o4-mini · RoundRobinGroupChat
+AutoGen AssistantAgent  (OpenAI o4-mini)
     ▼
-Notion MCP Server  (npx mcp-remote)  ← retried up to 3× on error
+Notion MCP Server  (npx mcp-remote)
     ▼
 Notion Cloud  (your workspace)
 ```
@@ -43,7 +45,6 @@ Notion Cloud  (your workspace)
 ## Setup
 
 ```bash
-# 1. Clone
 git clone https://github.com/umair-ds92/notion-mcp-agent.git
 cd notion-mcp-agent
 python -m venv .venv && source .venv/bin/activate
@@ -56,16 +57,14 @@ cp .env.example .env   # fill in OPENAI_API_KEY and NOTION_API_KEY
 ## Run
 
 ```bash
+# Local
 python app.py
-# API:  http://localhost:7001
-# Docs: http://localhost:7001/docs
+
+# Docker
+docker compose up --build
 ```
 
-## Test
-
-```bash
-pytest tests/ -v
-```
+Server starts at `http://localhost:7001` · Swagger docs at `/docs`
 
 ---
 
@@ -74,28 +73,37 @@ pytest tests/ -v
 | Method | Endpoint | Description |
 |---|---|---|
 | GET | `/health` | Liveness check |
-| POST | `/run` | Submit a natural language task |
+| POST | `/run` | Full result returned at once |
+| POST | `/run/stream` | Real-time SSE stream of agent messages |
 
+**Standard request:**
 ```bash
 curl -X POST http://localhost:7001/run \
   -H "Content-Type: application/json" \
   -d '{"task": "Create a page titled Sprint 42 Retro"}'
 ```
 
-Every response includes a `request_id` for log tracing. The same ID is returned in the `X-Request-ID` response header.
+**Streaming request:**
+```bash
+curl -X POST http://localhost:7001/run/stream \
+  -H "Content-Type: application/json" \
+  -d '{"task": "Create a page titled Sprint 42 Retro"}' \
+  --no-buffer
+```
+
+The stream emits one `data: <message>` SSE event per agent turn, ending with `data: [DONE]`.
 
 ---
 
-## Logs
+## Test & Lint
 
-All logs are emitted as structured JSON to stdout — ready for ingestion by Datadog, CloudWatch, or any log aggregator.
-
-```json
-{"asctime": "2026-02-22T10:01:05", "levelname": "INFO", "name": "agent_pool", "message": "task_start", "task_preview": "Create a page titled..."}
-{"asctime": "2026-02-22T10:01:09", "levelname": "INFO", "name": "agent_pool", "message": "task_complete", "duration_ms": 4132, "message_count": 6}
+```bash
+pytest tests/ -v       # run all tests
+ruff check .           # lint
+mypy app.py            # type check
 ```
 
-Set `LOG_LEVEL=DEBUG` in `.env` for verbose output during development.
+CI runs automatically on every push via GitHub Actions.
 
 ---
 
@@ -110,7 +118,6 @@ Set `LOG_LEVEL=DEBUG` in `.env` for verbose output during development.
 | `MCP_READ_TIMEOUT` | ❌ | `20` | MCP timeout (seconds) |
 | `LOG_LEVEL` | ❌ | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
 | `RETRY_MAX_ATTEMPTS` | ❌ | `3` | MCP retry attempts |
-| `RETRY_BASE_DELAY` | ❌ | `1.0` | Retry base delay (seconds) |
 | `PORT` | ❌ | `7001` | Server port |
 | `NGROK_AUTH_TOKEN` | ❌ | — | Enables public ngrok tunnel |
 
@@ -120,18 +127,26 @@ Set `LOG_LEVEL=DEBUG` in `.env` for verbose output during development.
 
 ```
 notion-mcp-agent/
-├── app.py                  # FastAPI routes + request_id middleware
-├── agent_pool.py           # Agent singleton with logging & retries
-├── notion_mcp_agent.py     # Local CLI entry point
-├── logger.py               # Structured JSON logger
-├── retries.py              # Exponential backoff decorator
-├── config.py               # Centralised config from .env
+├── app.py                        # FastAPI routes incl. /run/stream
+├── agent_pool.py                 # Singleton with run_task + stream_task
+├── notion_mcp_agent.py           # Local CLI entry point
+├── logger.py                     # Structured JSON logger
+├── retries.py                    # Exponential backoff decorator
+├── config.py                     # Centralised config from .env
 ├── requirements.txt
+├── ruff.toml                     # Linting config
 ├── pytest.ini
+├── Dockerfile
+├── docker-compose.yml
+├── .dockerignore
+├── .github/
+│   └── workflows/
+│       └── ci.yml                # GitHub Actions — lint, test, docker build
 ├── tests/
-│   ├── test_api.py         # API contract tests
-│   ├── test_retries.py     # Retry logic unit tests
-│   └── test_config.py      # Config validation tests
+│   ├── test_api.py
+│   ├── test_stream.py            # SSE streaming tests
+│   ├── test_retries.py
+│   └── test_config.py
 ├── .env.example
 ├── .gitignore
 └── README.md
@@ -144,8 +159,7 @@ notion-mcp-agent/
 - [x] Project scaffold and secure config
 - [x] FastAPI + native async, agent singleton
 - [x] Structured logging, error handling, retries
-- [ ] Streaming SSE endpoint (`/run/stream`)
-- [ ] Docker + GitHub Actions CI
+- [x] Streaming SSE endpoint, Docker, GitHub Actions CI
 - [ ] API key auth + OpenTelemetry tracing
 - [ ] Multi-tool registry (Gmail, Calendar, Slack)
 

@@ -1,16 +1,14 @@
 """
-agent_pool.py — Agent singleton with structured logging and retry logic.
+agent_pool.py — Agent singleton with streaming support.
 
 Changes:
-  - All print() calls replaced with structured JSON log entries.
-  - mcp_server_tools() is wrapped with @with_retry so transient MCP
-    subprocess failures are retried before raising.
-  - run_task() logs task start, completion, and duration.
+  - Added stream_task() — an async generator that yields agent
+    messages one at a time, used by the /run/stream SSE endpoint.
 """
 
 import asyncio
 import time
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 from autogen_agentchat.agents import AssistantAgent
 from autogen_agentchat.conditions import TextMentionTermination
@@ -24,20 +22,17 @@ from retries import with_retry
 
 log = get_logger(__name__)
 
-# Module-level singleton state
 _team: Optional[RoundRobinGroupChat] = None
 _lock = asyncio.Lock()
 
 
 @with_retry(max_attempts=3, base_delay=1.0, max_delay=8.0)
 async def _load_mcp_tools(params: StdioServerParams):
-    """Load MCP tools with automatic retry on transient failures."""
     return await mcp_server_tools(server_params=params)
 
 
 async def _build_team() -> RoundRobinGroupChat:
-    """Build and return a fully wired AutoGen team."""
-    log.info("agent_pool_build_start", model=config.OPENAI_MODEL)
+    log.info("agent_pool_build_start", extra={"model": config.OPENAI_MODEL})
 
     params = StdioServerParams(
         command="npx",
@@ -52,7 +47,7 @@ async def _build_team() -> RoundRobinGroupChat:
     )
 
     tools = await _load_mcp_tools(params)
-    log.info("mcp_tools_loaded", tool_count=len(tools))
+    log.info("mcp_tools_loaded", extra={"tool_count": len(tools)})
 
     agent = AssistantAgent(
         name="notion_agent",
@@ -76,15 +71,15 @@ class AgentPool:
     """
     Singleton wrapper around the AutoGen team.
 
-    Usage:
-        await AgentPool.initialise()   # call once at app startup
-        result = await AgentPool.run_task("Create a page titled X")
-        await AgentPool.shutdown()     # call on app teardown
+    Public methods:
+        initialise()            — warm up at app startup
+        run_task(task)          — run and return full result
+        stream_task(task)       — async generator, yields messages one by one
+        shutdown()              — cleanup on app teardown
     """
 
     @classmethod
     async def initialise(cls) -> None:
-        """Warm up: build the team and cache it."""
         global _team
         async with _lock:
             if _team is None:
@@ -94,33 +89,49 @@ class AgentPool:
 
     @classmethod
     async def run_task(cls, task: str) -> str:
+        """Run a task and return the full output as a single string."""
+        global _team
+        if _team is None:
+            await cls.initialise()
+
+        log.info("task_start", extra={"task_preview": task[:80]})
+        t0 = time.monotonic()
+        output = []
+
+        try:
+            async for msg in _team.run_stream(task=task):
+                output.append(str(msg))
+        except Exception as exc:
+            log.error("task_failed", extra={"error": str(exc), "task_preview": task[:80]})
+            raise
+
+        duration_ms = round((time.monotonic() - t0) * 1000)
+        log.info("task_complete", extra={"duration_ms": duration_ms, "message_count": len(output)})
+        return "\n\n".join(output)
+
+    @classmethod
+    async def stream_task(cls, task: str) -> AsyncIterator[str]:
         """
-        Run a task against the cached team.
-        Falls back to initialising if the pool is cold.
+        Async generator — yields agent messages one at a time.
+        Used by the /run/stream SSE endpoint.
         """
         global _team
         if _team is None:
             await cls.initialise()
 
-        log.info("task_start", task_preview=task[:80])
+        log.info("stream_task_start", extra={"task_preview": task[:80]})
         t0 = time.monotonic()
+        count = 0
 
-        output = []
-        try:
-            async for msg in _team.run_stream(task=task):
-                output.append(str(msg))
-        except Exception as exc:
-            log.error("task_failed", error=str(exc), task_preview=task[:80])
-            raise
+        async for msg in _team.run_stream(task=task):
+            count += 1
+            yield str(msg)
 
         duration_ms = round((time.monotonic() - t0) * 1000)
-        log.info("task_complete", duration_ms=duration_ms, message_count=len(output))
-
-        return "\n\n".join(output)
+        log.info("stream_task_complete", extra={"duration_ms": duration_ms, "message_count": count})
 
     @classmethod
     async def shutdown(cls) -> None:
-        """Cleanup on application teardown."""
         global _team
         log.info("agent_pool_shutdown")
         _team = None

@@ -104,5 +104,5 @@ async def test_run_agent_error_returns_500(client, mock_agent_pool):
     assert response.status_code == 500
     body = response.json()
     # Should not leak raw traceback — must be structured
-    assert "request_id" in body
-    assert body["code"] == "agent_error"
+    assert "request_id" in body["detail"]
+    assert body["detail"]["code"] == "agent_error"
