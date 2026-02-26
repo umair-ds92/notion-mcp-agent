@@ -56,3 +56,6 @@ def validate() -> None:
             f"Missing required environment variables: {', '.join(missing)}. "
             "Copy .env.example to .env and fill in the values."
         )
+    
+# ── Auth ─────────────────────────────────────────────────────────────────────
+API_KEY: str = os.getenv("API_KEY", "")

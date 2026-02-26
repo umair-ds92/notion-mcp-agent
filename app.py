@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from auth import APIKeyMiddleware
 
 import config
 from agent_pool import AgentPool
@@ -44,7 +45,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# app.add_middleware(APIKeyMiddleware)
 app.add_middleware(
+    APIKeyMiddleware,
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
