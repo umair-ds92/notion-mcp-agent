@@ -16,6 +16,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from auth import APIKeyMiddleware
+from tracing import setup_tracing
+
 
 import config
 from agent_pool import AgentPool
@@ -29,6 +31,7 @@ log = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config.validate()
+    setup_tracing(app)
     log.info("app_startup", extra={"version": "0.4.0", "port": config.PORT})
     await AgentPool.initialise()
     yield
