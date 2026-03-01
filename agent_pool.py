@@ -1,9 +1,10 @@
 """
-agent_pool.py — Agent singleton with streaming support.
+agent_pool.py — Agent singleton using the multi-tool registry.
 
-Changes:
-  - Added stream_task() — an async generator that yields agent
-    messages one at a time, used by the /run/stream SSE endpoint.
+Changes from Commit 4:
+  - Loads MCP tools from tools/registry.py instead of hardcoding
+    the Notion server directly. Tools from ALL enabled servers are
+    merged and passed to the agent in a single list.
 """
 
 import asyncio
@@ -14,11 +15,12 @@ from autogen_agentchat.agents import AssistantAgent
 from autogen_agentchat.conditions import TextMentionTermination
 from autogen_agentchat.teams import RoundRobinGroupChat
 from autogen_ext.models.openai import OpenAIChatCompletionClient
-from autogen_ext.tools.mcp import StdioServerParams, mcp_server_tools
+from autogen_ext.tools.mcp import mcp_server_tools
 
 import config
 from logger import get_logger
 from retries import with_retry
+from tools.registry import TOOL_REGISTRY
 
 log = get_logger(__name__)
 
@@ -27,33 +29,36 @@ _lock = asyncio.Lock()
 
 
 @with_retry(max_attempts=3, base_delay=1.0, max_delay=8.0)
-async def _load_mcp_tools(params: StdioServerParams):
-    return await mcp_server_tools(server_params=params)
+async def _load_tools_from_server(server):
+    """Load tools from a single MCP server with retry."""
+    tools = await mcp_server_tools(server_params=server.params)
+    log.info("tools_loaded", extra={"server": server.name, "count": len(tools)})
+    return tools
 
 
 async def _build_team() -> RoundRobinGroupChat:
+    """Build the AutoGen team with tools from all registered MCP servers."""
     log.info("agent_pool_build_start", extra={"model": config.OPENAI_MODEL})
 
-    params = StdioServerParams(
-        command="npx",
-        args=["-y", "mcp-remote", config.NOTION_MCP_URL],
-        env={"NOTION_API_KEY": config.NOTION_API_KEY},
-        read_timeout_seconds=config.MCP_READ_TIMEOUT,
-    )
+    # Load tools from all enabled servers concurrently
+    tool_lists = await asyncio.gather(*[
+        _load_tools_from_server(server) for server in TOOL_REGISTRY
+    ])
+
+    # Flatten into a single list
+    all_tools = [tool for tool_list in tool_lists for tool in tool_list]
+    log.info("all_tools_loaded", extra={"total_tool_count": len(all_tools)})
 
     model = OpenAIChatCompletionClient(
         model=config.OPENAI_MODEL,
         api_key=config.OPENAI_API_KEY,
     )
 
-    tools = await _load_mcp_tools(params)
-    log.info("mcp_tools_loaded", extra={"tool_count": len(tools)})
-
     agent = AssistantAgent(
         name="notion_agent",
         system_message=config.AGENT_SYSTEM_MESSAGE,
         model_client=model,
-        tools=tools,
+        tools=all_tools,
         reflect_on_tool_use=True,
     )
 
@@ -63,7 +68,7 @@ async def _build_team() -> RoundRobinGroupChat:
         termination_condition=TextMentionTermination("TERMINATE"),
     )
 
-    log.info("agent_pool_build_complete")
+    log.info("agent_pool_build_complete", extra={"tool_count": len(all_tools)})
     return team
 
 
@@ -72,10 +77,10 @@ class AgentPool:
     Singleton wrapper around the AutoGen team.
 
     Public methods:
-        initialise()            — warm up at app startup
-        run_task(task)          — run and return full result
-        stream_task(task)       — async generator, yields messages one by one
-        shutdown()              — cleanup on app teardown
+        initialise()        — warm up at app startup
+        run_task(task)      — run and return full result
+        stream_task(task)   — async generator, yields messages one by one
+        shutdown()          — cleanup on app teardown
     """
 
     @classmethod
@@ -89,7 +94,6 @@ class AgentPool:
 
     @classmethod
     async def run_task(cls, task: str) -> str:
-        """Run a task and return the full output as a single string."""
         global _team
         if _team is None:
             await cls.initialise()
@@ -111,10 +115,6 @@ class AgentPool:
 
     @classmethod
     async def stream_task(cls, task: str) -> AsyncIterator[str]:
-        """
-        Async generator — yields agent messages one at a time.
-        Used by the /run/stream SSE endpoint.
-        """
         global _team
         if _team is None:
             await cls.initialise()
@@ -138,5 +138,4 @@ class AgentPool:
 
     @classmethod
     async def _build_team_direct(cls) -> RoundRobinGroupChat:
-        """Build a fresh team — for local CLI use only."""
         return await _build_team()

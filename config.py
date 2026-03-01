@@ -64,3 +64,11 @@ API_KEY: str = os.getenv("API_KEY", "")
 OTEL_ENABLED: bool = os.getenv("OTEL_ENABLED", "false").lower() == "true"
 OTEL_SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "notion-mcp-agent")
 OTEL_EXPORTER_ENDPOINT: str = os.getenv("OTEL_EXPORTER_ENDPOINT", "http://localhost:4317")
+
+
+# ── Tool registry — optional integrations ────────────────────────────────────
+GMAIL_ENABLED: bool = os.getenv("GMAIL_ENABLED", "false").lower() == "true"
+GMAIL_CREDENTIALS: str = os.getenv("GMAIL_CREDENTIALS", "")
+
+GCAL_ENABLED: bool = os.getenv("GCAL_ENABLED", "false").lower() == "true"
+GCAL_CREDENTIALS: str = os.getenv("GCAL_CREDENTIALS", "")

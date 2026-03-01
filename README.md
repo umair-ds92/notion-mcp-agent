@@ -12,21 +12,24 @@
 
 ```
 Client (curl / Postman)
-    │
-    ├── POST /run         → full result returned at once
-    └── POST /run/stream  → messages streamed via SSE in real time
+    │ Authorization: Bearer <key>
+    ├── POST /run         → full result at once
+    └── POST /run/stream  → real-time SSE stream
     ▼
-FastAPI REST API  (app.py)  :7001
-    │ request_id · structured logs · retries
+APIKeyMiddleware → FastAPI (app.py) :7001
+    │ request_id · structured JSON logs · OTel traces
     ▼
-AgentPool singleton  (agent_pool.py)
-    │ MCP tools loaded once at startup
+AgentPool singleton (agent_pool.py)
+    │ tools loaded once from all enabled MCP servers
     ▼
-AutoGen AssistantAgent  (OpenAI o4-mini)
+Tool Registry (tools/registry.py)
+    ├── Notion MCP        (always enabled)
+    ├── Gmail MCP         (opt-in: GMAIL_ENABLED=true)
+    └── Google Calendar   (opt-in: GCAL_ENABLED=true)
     ▼
-Notion MCP Server  (npx mcp-remote)
+AutoGen AssistantAgent (OpenAI o4-mini)
     ▼
-Notion Cloud  (your workspace)
+Notion Cloud / Gmail / Google Calendar
 ```
 
 ---
@@ -64,43 +67,51 @@ python app.py
 docker compose up --build
 ```
 
-Server starts at `http://localhost:7001` · Swagger docs at `/docs`
+Server at `http://localhost:7001` · Docs at `/docs`
 
 ---
 
 ## API
 
-| Method | Endpoint | Description |
-|---|---|---|
-| GET | `/health` | Liveness check |
-| POST | `/run` | Full result returned at once |
-| POST | `/run/stream` | Real-time SSE stream of agent messages |
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| GET | `/health` | ❌ | Liveness check |
+| POST | `/run` | ✅ | Full result at once |
+| POST | `/run/stream` | ✅ | Real-time SSE stream |
 
-**Standard request:**
 ```bash
 curl -X POST http://localhost:7001/run \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your-api-key>" \
   -d '{"task": "Create a page titled Sprint 42 Retro"}'
-```
 
-**Streaming request:**
-```bash
+# Streaming
 curl -X POST http://localhost:7001/run/stream \
   -H "Content-Type: application/json" \
-  -d '{"task": "Create a page titled Sprint 42 Retro"}' \
-  --no-buffer
+  -H "Authorization: Bearer <your-api-key>" \
+  -d '{"task": "List all pages"}' --no-buffer
 ```
 
-The stream emits one `data: <message>` SSE event per agent turn, ending with `data: [DONE]`.
+> Leave `API_KEY` empty in `.env` to disable auth for local development.
+
+---
+
+## Adding a New Tool Integration
+
+1. Add a new `ToolServer` entry in `tools/registry.py`
+2. Add the env vars to `.env.example` and `config.py`
+3. Enable it with `TOOL_NAME_ENABLED=true` in `.env`
+
+No changes to `agent_pool.py` or `app.py` required.
 
 ---
 
 ## Test & Lint
 
 ```bash
-pytest tests/ -v       # run all tests
-ruff check .           # lint
-mypy app.py            # type check
+pytest tests/ -v
+ruff check .
+mypy app.py
 ```
 
 CI runs automatically on every push via GitHub Actions.
@@ -113,11 +124,17 @@ CI runs automatically on every push via GitHub Actions.
 |---|---|---|---|
 | `OPENAI_API_KEY` | ✅ | — | OpenAI API key |
 | `NOTION_API_KEY` | ✅ | — | Notion integration token |
+| `API_KEY` | ❌ | — | Bearer token (empty = auth disabled) |
 | `OPENAI_MODEL` | ❌ | `o4-mini` | Model to use |
 | `AGENT_MAX_TURNS` | ❌ | `5` | Max reasoning turns |
 | `MCP_READ_TIMEOUT` | ❌ | `20` | MCP timeout (seconds) |
 | `LOG_LEVEL` | ❌ | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
 | `RETRY_MAX_ATTEMPTS` | ❌ | `3` | MCP retry attempts |
+| `OTEL_ENABLED` | ❌ | `false` | Enable OpenTelemetry tracing |
+| `OTEL_SERVICE_NAME` | ❌ | `notion-mcp-agent` | Service name in traces |
+| `OTEL_EXPORTER_ENDPOINT` | ❌ | `localhost:4317` | OTLP gRPC endpoint |
+| `GMAIL_ENABLED` | ❌ | `false` | Enable Gmail MCP tool |
+| `GCAL_ENABLED` | ❌ | `false` | Enable Google Calendar MCP tool |
 | `PORT` | ❌ | `7001` | Server port |
 | `NGROK_AUTH_TOKEN` | ❌ | — | Enables public ngrok tunnel |
 
@@ -127,26 +144,30 @@ CI runs automatically on every push via GitHub Actions.
 
 ```
 notion-mcp-agent/
-├── app.py                        # FastAPI routes incl. /run/stream
-├── agent_pool.py                 # Singleton with run_task + stream_task
-├── notion_mcp_agent.py           # Local CLI entry point
+├── app.py                        # FastAPI — routes, auth, tracing
+├── agent_pool.py                 # Singleton — loads from tool registry
+├── auth.py                       # API key middleware
+├── tracing.py                    # OpenTelemetry setup (opt-in)
 ├── logger.py                     # Structured JSON logger
 ├── retries.py                    # Exponential backoff decorator
 ├── config.py                     # Centralised config from .env
-├── requirements.txt
-├── ruff.toml                     # Linting config
-├── pytest.ini
-├── Dockerfile
-├── docker-compose.yml
-├── .dockerignore
-├── .github/
-│   └── workflows/
-│       └── ci.yml                # GitHub Actions — lint, test, docker build
+├── notion_mcp_agent.py           # Local CLI entry point
+├── tools/
+│   ├── registry.py               # Multi-tool MCP server registry
+│   └── __init__.py
 ├── tests/
 │   ├── test_api.py
-│   ├── test_stream.py            # SSE streaming tests
+│   ├── test_stream.py
+│   ├── test_auth.py
+│   ├── test_registry.py
 │   ├── test_retries.py
 │   └── test_config.py
+├── .github/workflows/ci.yml
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+├── ruff.toml
+├── pytest.ini
 ├── .env.example
 ├── .gitignore
 └── README.md
@@ -159,9 +180,8 @@ notion-mcp-agent/
 - [x] Project scaffold and secure config
 - [x] FastAPI + native async, agent singleton
 - [x] Structured logging, error handling, retries
-- [x] Streaming SSE endpoint, Docker, GitHub Actions CI
-- [ ] API key auth + OpenTelemetry tracing
-- [ ] Multi-tool registry (Gmail, Calendar, Slack)
+- [x] Streaming SSE, Docker, GitHub Actions CI
+- [x] API key auth, OpenTelemetry tracing, multi-tool registry
 
 ---
 

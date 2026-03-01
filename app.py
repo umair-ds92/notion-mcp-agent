@@ -48,14 +48,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# app.add_middleware(APIKeyMiddleware)
+# 1. CORS first (outermost)
 app.add_middleware(
-    APIKeyMiddleware,
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 2. Auth second (runs after CORS)
+app.add_middleware(APIKeyMiddleware)
 
 
 # ── Global exception handler ──────────────────────────────────────────────────
